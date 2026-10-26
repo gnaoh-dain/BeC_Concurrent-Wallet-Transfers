@@ -1,0 +1,75 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+enum TransferStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum LedgerType {
+  CREDIT
+  DEBIT
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  balance   BigInt   @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ledgers       Ledger[]
+  sentTransfers     Transfer[] @relation("SentTransfers")
+  receivedTransfers Transfer[] @relation("ReceivedTransfers")
+
+  @@map("users")
+}
+
+model Ledger {
+  id        String     @id @default(uuid())
+  amount    BigInt     
+  type      LedgerType
+  createdAt DateTime   @default(now())
+
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  transferId String
+  transfer   Transfer @relation(fields: [transferId], references: [id])
+
+  @@unique([transferId, type])   
+  @@index([userId, createdAt])
+  @@map("ledgers")
+}
+
+model Transfer {
+  id             String         @id @default(uuid())
+  amount         BigInt
+  status         TransferStatus @default(PENDING)
+  idempotencyKey String         @unique
+  failureReason  String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  fromUserId String
+  fromUser   User   @relation("SentTransfers", fields: [fromUserId], references: [id])
+  toUserId   String
+  toUser     User   @relation("ReceivedTransfers", fields: [toUserId], references: [id])
+
+  ledgers Ledger[]
+
+  @@index([fromUserId, createdAt])
+  @@index([toUserId, createdAt])
+  @@map("transfers")
+}
