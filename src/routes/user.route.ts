@@ -24,8 +24,7 @@ router.post('/', async (req, res) => {
     !name.trim() ||
     !email.trim()
   ) {
-    res.status(400).json({ message: 'Invalid name or email' });
-    return;
+    return res.status(400).json({ message: 'Invalid name or email' });
   }
 
   try {
@@ -35,16 +34,16 @@ router.post('/', async (req, res) => {
         email: email.trim().toLowerCase(),
       },
     });
-    res.status(201).json(user);
+    return res.status(201).json(user);
   } catch (error) {
+    console.error(error);
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === 'P2002'
     ) {
-      res.status(409).json({ message: 'Email already exists' });
+      return res.status(409).json({ message: 'Email already exists' });
     }
-    console.error(error);
-    res.status(500).json({ message: 'Internal server error' });
+    return res.status(500).json({ message: 'Internal server error' });
   }
 });
 

@@ -20,14 +20,6 @@ export async function transferFunds(
   try {
     return await prisma.$transaction(
       async (tx) => {
-        const lockRows = await tx.$queryRaw<
-          Array<LockUser>
-        >`SELECT id, balance FROM "users" WHERE id IN (${fromId}, ${toId}) ORDER BY id FOR UPDATE`;
-
-        if (lockRows.length !== 2) {
-          throw new HttpError(404, 'WALLET_NOT_FOUND');
-        }
-
         const transfer = await tx.transfer.create({
           data: {
             fromUserId: fromId,
@@ -36,6 +28,11 @@ export async function transferFunds(
             idempotencyKey,
           },
         });
+
+        const lockRows = await tx.$queryRaw<Array<LockUser>>`
+          SELECT id, balance FROM "users" WHERE id IN (${fromId}, ${toId}) 
+          ORDER BY id FOR NO KEY UPDATE
+        `;
 
         const from = lockRows.find((row) => row.id === fromId)!;
 
@@ -78,23 +75,31 @@ export async function transferFunds(
       { timeout: 10_000 },
     );
   } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2002'
-    ) {
-      const existing = await prisma.transfer.findUniqueOrThrow({
-        where: { idempotencyKey },
-      });
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === 'P2002') {
+        const existing = await prisma.transfer.findUniqueOrThrow({
+          where: { idempotencyKey },
+        });
 
-      if (
-        existing.fromUserId !== fromId ||
-        existing.toUserId !== toId ||
-        existing.amount !== amount
-      ) {
-        throw new HttpError(409, 'IDEMPOTENCY_KEY_REUSED');
+        if (
+          existing.fromUserId !== fromId ||
+          existing.toUserId !== toId ||
+          existing.amount !== amount
+        ) {
+          throw new HttpError(409, 'IDEMPOTENCY_KEY_REUSED');
+        }
+        if (existing.status === TransferStatus.PENDING) {
+          throw new HttpError(409, 'TRANSFER_IN_PROGRESS');
+        }
+
+        if (existing.status === TransferStatus.FAILED) {
+          throw new HttpError(422, existing.failureReason ?? 'TRANSFER_FAILED');
+        }
+
+        return existing;
+      } else if (error.code === 'P2003') {
+        throw new HttpError(404, 'WALLET_NOT_FOUND');
       }
-
-      return existing;
     }
     throw error;
   }

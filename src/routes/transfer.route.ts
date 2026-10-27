@@ -24,10 +24,15 @@ router.post('/', async (req, res) => {
       throw new HttpError(400, 'SAME_WALLET');
     }
 
+    const parsedAmount = parseAmount(amount);
+    if (parsedAmount <= 0n) {
+      throw new HttpError(400, 'INVALID_AMOUNT');
+    }
+
     const transfer = await transferFunds(
       fromId,
       toId,
-      parseAmount(amount),
+      parsedAmount,
       idempotencyKey,
     );
 

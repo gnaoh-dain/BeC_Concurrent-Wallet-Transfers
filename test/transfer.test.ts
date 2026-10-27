@@ -181,4 +181,115 @@ describe('transferFunds', () => {
     assert.equal(balances.get(a!), 900_000n);
     assert.equal(balances.get(b!), 100_000n);
   });
+
+  test('Case E — retry key đã hoàn tất không phải chờ lock ví', async () => {
+    const [a, b] = await createWallets([1_000_000n, 0n]);
+    const key = randomUUID();
+    const first = await transferFunds(a!, b!, 100_000n, key);
+
+    // Giữ lock ví A như một transfer khác đang chạy
+    let release!: () => void;
+    let locked!: () => void;
+    const isLocked = new Promise<void>((r) => (locked = r));
+    const holder = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT 1 FROM "users" WHERE id = ${a!} FOR NO KEY UPDATE`;
+        locked();
+        await new Promise<void>((r) => (release = r));
+      },
+      { timeout: 10_000 },
+    );
+    await isLocked;
+
+    try {
+      const retry = await Promise.race([
+        transferFunds(a!, b!, 100_000n, key),
+        new Promise((r) => setTimeout(r, 2_000, 'TIMEOUT')),
+      ]);
+      assert.notEqual(retry, 'TIMEOUT', 'retry bị kẹt chờ lock ví');
+      assert.equal((retry as { id: string }).id, first.id);
+    } finally {
+      release();
+      await holder;
+    }
+  });
+
+  // Seed transfer ở trạng thái cho trước để test contract retry theo status
+  async function seedTransfer(
+    status: 'PENDING' | 'FAILED',
+    failureReason?: string,
+  ) {
+    const [a, b] = await createWallets([1_000_000n, 0n]);
+    const key = randomUUID();
+    await prisma.transfer.create({
+      data: {
+        fromUserId: a!,
+        toUserId: b!,
+        amount: 100_000n,
+        idempotencyKey: key,
+        status,
+        failureReason,
+      },
+    });
+    return { a: a!, b: b!, key };
+  }
+
+  function isHttpError(status: number, message: string) {
+    return (e: unknown) =>
+      e instanceof HttpError && e.status === status && e.message === message;
+  }
+
+  test('Case F — retry key đang PENDING: 409 TRANSFER_IN_PROGRESS, không chuyển tiền', async () => {
+    const { a, b, key } = await seedTransfer('PENDING');
+
+    await assert.rejects(
+      transferFunds(a, b, 100_000n, key),
+      isHttpError(409, 'TRANSFER_IN_PROGRESS'),
+    );
+
+    const balances = await balancesOf([a, b]);
+    assert.equal(balances.get(a), 1_000_000n);
+    assert.equal(balances.get(b), 0n);
+  });
+
+  test('Case G — retry key đã FAILED: trả lại đúng lỗi cũ, không chạy lại', async () => {
+    const { a, b, key } = await seedTransfer('FAILED', 'INSUFFICIENT_BALANCE');
+
+    // Ví A đủ tiền: nếu service chạy lại thay vì replay thì sẽ chuyển thành công
+    await assert.rejects(
+      transferFunds(a, b, 100_000n, key),
+      isHttpError(422, 'INSUFFICIENT_BALANCE'),
+    );
+
+    const balances = await balancesOf([a, b]);
+    assert.equal(balances.get(a), 1_000_000n);
+    assert.equal(balances.get(b), 0n);
+  });
+
+  test('Case H — cùng key khác payload: IDEMPOTENCY_KEY_REUSED', async () => {
+    const [a, b] = await createWallets([1_000_000n, 0n]);
+    const key = randomUUID();
+    await transferFunds(a!, b!, 100_000n, key);
+
+    await assert.rejects(
+      transferFunds(a!, b!, 200_000n, key),
+      isHttpError(409, 'IDEMPOTENCY_KEY_REUSED'),
+    );
+
+    const balances = await balancesOf([a!, b!]);
+    assert.equal(balances.get(a!), 900_000n, 'request khác payload vẫn chuyển tiền');
+  });
+
+  test('Case I — ví không tồn tại: 404 WALLET_NOT_FOUND, không tạo transfer', async () => {
+    const [a] = await createWallets([1_000_000n]);
+    const key = randomUUID();
+
+    await assert.rejects(
+      transferFunds(a!, randomUUID(), 100_000n, key),
+      isHttpError(404, 'WALLET_NOT_FOUND'),
+    );
+
+    assert.equal(await prisma.transfer.count({ where: { idempotencyKey: key } }), 0);
+    assert.equal((await balancesOf([a!])).get(a!), 1_000_000n);
+  });
 });
