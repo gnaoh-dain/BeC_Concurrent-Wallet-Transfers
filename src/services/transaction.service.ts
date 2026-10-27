@@ -1,10 +1,10 @@
-import { prisma } from '../config/prisma.js';
+import { prisma } from '../config/prisma.ts';
 import {
   LedgerType,
   Prisma,
   TransferStatus,
-} from '../generated/prisma/client.js';
-import { HttpError } from '../utils/index.js';
+} from '../generated/prisma/client.ts';
+import { checkConstraintError, HttpError } from '../utils/index.ts';
 
 type LockUser = {
   id: string;
@@ -18,7 +18,7 @@ export async function transferFunds(
   idempotencyKey: string,
 ) {
   try {
-    return await prisma.$transaction(
+    const result = await prisma.$transaction(
       async (tx) => {
         const transfer = await tx.transfer.create({
           data: {
@@ -37,7 +37,13 @@ export async function transferFunds(
         const from = lockRows.find((row) => row.id === fromId)!;
 
         if (from.balance < amount) {
-          throw new HttpError(422, 'INSUFFICIENT_BALANCE');
+          return tx.transfer.update({
+            where: { id: transfer.id },
+            data: {
+              status: TransferStatus.FAILED,
+              failureReason: 'INSUFFICIENT_BALANCE',
+            },
+          });
         }
 
         await tx.user.update({
@@ -74,6 +80,11 @@ export async function transferFunds(
       },
       { timeout: 10_000 },
     );
+
+    if (result.status === TransferStatus.FAILED) {
+      throw new HttpError(422, result.failureReason ?? 'TRANSFER_FAILED');
+    }
+    return result;
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2002') {
@@ -101,6 +112,6 @@ export async function transferFunds(
         throw new HttpError(404, 'WALLET_NOT_FOUND');
       }
     }
-    throw error;
+    throw checkConstraintError(error) ?? error;
   }
 }

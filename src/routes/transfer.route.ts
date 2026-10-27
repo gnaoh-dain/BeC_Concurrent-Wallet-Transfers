@@ -1,39 +1,21 @@
 import { Router } from 'express';
-import { transferFunds } from '../services/transaction.service.js';
-import { HttpError, parseAmount } from '../utils/index.js';
+import type { z } from 'zod';
+import { transferFunds } from '../services/transaction.service.ts';
+import { HttpError } from '../utils/index.ts';
+import { transferSchema } from '../middlewares/schema/transfer.schema.ts';
+import { validate } from '../middlewares/validate.middleware.ts';
 
 const router = Router();
 
-router.post('/', async (req, res) => {
-  const idempotencyKey = req.header('idempotency-key');
-  const { fromId, toId, amount } = req.body ?? {};
+router.post('/', validate(transferSchema), async (_req, res) => {
+  const { headers, body } = res.locals.data as z.infer<typeof transferSchema>;
 
   try {
-    if (!idempotencyKey) {
-      throw new HttpError(400, 'MISSING_IDEMPOTENCY_KEY');
-    }
-    if (
-      typeof fromId !== 'string' ||
-      typeof toId !== 'string' ||
-      !fromId ||
-      !toId
-    ) {
-      throw new HttpError(400, 'INVALID_WALLET_ID');
-    }
-    if (fromId === toId) {
-      throw new HttpError(400, 'SAME_WALLET');
-    }
-
-    const parsedAmount = parseAmount(amount);
-    if (parsedAmount <= 0n) {
-      throw new HttpError(400, 'INVALID_AMOUNT');
-    }
-
     const transfer = await transferFunds(
-      fromId,
-      toId,
-      parsedAmount,
-      idempotencyKey,
+      body.fromId,
+      body.toId,
+      body.amount,
+      headers['idempotency-key'],
     );
 
     res.status(201).json(transfer);

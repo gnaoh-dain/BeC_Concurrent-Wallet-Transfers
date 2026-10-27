@@ -1,39 +1,25 @@
 import { Router } from 'express';
-import { prisma } from '../config/prisma.js';
-import { parseAmount } from '../utils/index.js';
-import { Prisma } from '../generated/prisma/client.js';
+import type { z } from 'zod';
+import { prisma } from '../config/prisma.ts';
+import { Prisma } from '../generated/prisma/client.ts';
+import { createUserSchema } from '../middlewares/schema/user.schema.ts';
+import { validate } from '../middlewares/validate.middleware.ts';
 
 const router = Router();
 
 router.get('/', async (_req, res) => {
   const users = await prisma.user.findMany({
-    orderBy: {
-      createdAt: 'desc',
-    },
+    orderBy: { createdAt: 'desc' },
   });
 
-  res.json(users);
+  return res.json(users);
 });
 
-router.post('/', async (req, res) => {
-  const { name, email } = req.body;
-
-  if (
-    typeof name !== 'string' ||
-    typeof email !== 'string' ||
-    !name.trim() ||
-    !email.trim()
-  ) {
-    return res.status(400).json({ message: 'Invalid name or email' });
-  }
+router.post('/', validate(createUserSchema), async (_req, res) => {
+  const { body } = res.locals.data as z.infer<typeof createUserSchema>;
 
   try {
-    const user = await prisma.user.create({
-      data: {
-        name: name.trim(),
-        email: email.trim().toLowerCase(),
-      },
-    });
+    const user = await prisma.user.create({ data: body });
     return res.status(201).json(user);
   } catch (error) {
     console.error(error);

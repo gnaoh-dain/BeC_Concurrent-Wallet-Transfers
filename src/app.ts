@@ -1,6 +1,6 @@
 import express from 'express';
-import userRouter from './routes/user.route.js';
-import transferRouter from './routes/transfer.route.js';
+import userRouter from './routes/user.route.ts';
+import transferRouter from './routes/transfer.route.ts';
 
 export const app = express();
 
